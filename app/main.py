@@ -47,15 +47,23 @@ def parse_record(record):
 
     offset+=ix
     ix, tname_serial_type = parse_varint(record[offset:])
+    
+    offset+=ix
+    ix, rootpage_serial_type = parse_varint(record[offset:])
    
     type_size = (type_serial_type -13)/2
     name_size = (name_serial_type -13)/2
     tname_size = (tname_serial_type -13)/2
+    
 
     tname_value_offset = int(num_bytes_header + type_size + name_size)
 
     tname = record[tname_value_offset: tname_value_offset + int(tname_size)]
-    return tname
+    
+    rp_offset = tname_value_offset + int(tname_size)
+    rootpage = int.from_bytes(record[rp_offset: rp_offset + rootpage_serial_type], 'big')
+
+    return tname, rootpage
 
 
 if command == ".dbinfo":
@@ -98,9 +106,42 @@ elif command == ".tables":
 
             database_file.seek(cell_pointer + bsize + bsize2)
             payload = database_file.read(num_pl)
-            tables.append(parse_record(payload).decode())
+            tables.append(parse_record(payload)[0].decode())
         
         print(" ".join(tables))
+elif command.startswith("SELECT"):
+     with open(database_file_path, "rb") as database_file:
+        database_file.seek(103) # Skip database header
+        ncells = int.from_bytes(database_file.read(2), byteorder="big")
+
+
+        # read cell pointers
+        database_file.seek(100 +8)
+        cell_pointers = [
+                int.from_bytes(database_file.read(2), "big") 
+                for _ in range(ncells)]
+
+
+        # A varint which is the total number of bytes of payload, including any overflow
+        # A varint which is the integer key, a.k.a. "rowid"
+        # The initial portion of the payload that does not spill to overflow pages.
+        tables = []
+        for cell_pointer in cell_pointers:
+            database_file.seek(cell_pointer)
+            bsize, num_pl = parse_varint(database_file.read(9))
+           
+            database_file.seek(cell_pointer + bsize)
+            bsize2, row_id = parse_varint(database_file.read(9))
+
+            database_file.seek(cell_pointer + bsize + bsize2)
+            payload = database_file.read(num_pl)
+            
+            table, rootpage = parse_record(payload)
+            if table.decode() == command.split(" ")[-1]:
+                database_file.seek((rootpage-1) * 4096 + 3)
+                ncells = database_file.read(2)
+                print(int.from_bytes(ncells, 'big'))
+
 
 else:
     print(f"Invalid command: {command}")
