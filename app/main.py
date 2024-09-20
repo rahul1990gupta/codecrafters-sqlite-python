@@ -100,7 +100,7 @@ elif command == ".tables":
             payload = database_file.read(num_pl)
             tables.append(parse_record(payload))
         
-        print(" ".join(tables))
+        print(" ".join(map(str, tables)))
 
 else:
     print(f"Invalid command: {command}")
