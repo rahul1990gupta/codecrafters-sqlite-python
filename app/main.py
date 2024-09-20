@@ -98,9 +98,9 @@ elif command == ".tables":
 
             database_file.seek(cell_pointer + bsize + bsize2)
             payload = database_file.read(num_pl)
-            tables.append(parse_record(payload))
+            tables.append(parse_record(payload).decode())
         
-        print(" ".join(map(str, tables)))
+        print(" ".join(tables))
 
 else:
     print(f"Invalid command: {command}")
