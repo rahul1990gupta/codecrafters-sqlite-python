@@ -7,6 +7,7 @@ from dataclasses import dataclass
 database_file_path = sys.argv[1]
 command = sys.argv[2]
 
+# hello
 if command == ".dbinfo":
     with open(database_file_path, "rb") as database_file:
         # You can use print statements as follows for debugging, they'll be visible when running tests.
