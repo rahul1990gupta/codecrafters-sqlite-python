@@ -74,9 +74,11 @@ if command == ".dbinfo":
          
 elif command == ".tables":
     with open(database_file_path, "rb") as database_file:
- 
+        database_file.seek(103) # Skip database header
+        ncells = int.from_bytes(database_file.read(2), byteorder="big")
+
+
         # read cell pointers
-        ncells = number_of_tables
         database_file.seek(100 +8)
         cell_pointers = [
                 int.from_bytes(database_file.read(2), "big") 
