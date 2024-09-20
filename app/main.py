@@ -5,7 +5,7 @@ from dataclasses import dataclass
 # import sqlparse - available if you need it!
 
 database_file_path = sys.argv[1]
-command = sys.argv[2]
+command = sys.argv[2].lower().strip()
 
 """
 - first 100 bytes contains the database header
@@ -109,7 +109,7 @@ elif command == ".tables":
             tables.append(parse_record(payload)[0].decode())
         
         print(" ".join(tables))
-elif command.startswith("SELECT"):
+elif command.startswith("select"):
      with open(database_file_path, "rb") as database_file:
         database_file.seek(103) # Skip database header
         ncells = int.from_bytes(database_file.read(2), byteorder="big")
