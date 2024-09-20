@@ -55,14 +55,12 @@ def parse_record(record):
     tname_value_offset = int(num_bytes_header + type_size + name_size)
 
     tname = record[tname_value_offset: tname_value_offset + int(tname_size)]
-    print(f"table_name {tname}") 
     return tname
 
 
-if command == ".dbinfo" or ".tables":
+if command == ".dbinfo":
     with open(database_file_path, "rb") as database_file:
         # You can use print statements as follows for debugging, they'll be visible when running tests.
-        print("Logs from your program will appear here!")
 
         # Uncomment this to pass the first stage
         database_file.seek(16)  # Skip the first 16 bytes of the header
@@ -71,36 +69,35 @@ if command == ".dbinfo" or ".tables":
         database_file.seek(103) # Skip database header
         number_of_tables = int.from_bytes(database_file.read(2), byteorder="big")
 
+        print(f"database page size: {page_size}")
+        print(f"number of tables: {number_of_tables}")
+         
+elif command == ".tables":
+    with open(database_file_path, "rb") as database_file:
+ 
         # read cell pointers
         ncells = number_of_tables
         database_file.seek(100 +8)
         cell_pointers = [
                 int.from_bytes(database_file.read(2), "big") 
                 for _ in range(ncells)]
-        print(cell_pointers)
 
 
         # A varint which is the total number of bytes of payload, including any overflow
         # A varint which is the integer key, a.k.a. "rowid"
         # The initial portion of the payload that does not spill to overflow pages.
-        
+        tables = []
         for cell_pointer in cell_pointers:
             database_file.seek(cell_pointer)
             bsize, num_pl = parse_varint(database_file.read(9))
            
-            print(bsize, num_pl)
             database_file.seek(cell_pointer + bsize)
             bsize2, row_id = parse_varint(database_file.read(9))
 
-            print(bsize, row_id)
             database_file.seek(cell_pointer + bsize + bsize2)
             payload = database_file.read(num_pl)
-            print(payload)
-            table = parse_record(payload)
+            tables.append(parse_record(payload))
+        print(" ".join(tables)
 
-
-        print(f"database page size: {page_size}")
-        print(f"number of tables: {number_of_tables}")
-         
 else:
     print(f"Invalid command: {command}")
