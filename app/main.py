@@ -4,8 +4,6 @@ from dataclasses import dataclass
 
 # import sqlparse - available if you need it!
 
-database_file_path = sys.argv[1]
-command = sys.argv[2].lower().strip()
 
 """
 - first 100 bytes contains the database header
@@ -35,113 +33,141 @@ def parse_varint(byte_stream):
 
     return 9, result  # If all 9 bytes are processed, this is the final result
 
+class Cell:
+    def __init__(self, cell_pointer, pbytes):
 
-def parse_record(record):
-    offset=0
-    ix, num_bytes_header = parse_varint(record)
-    offset+=ix
-    ix, type_serial_type = parse_varint(record[offset:])
-
-    offset+=ix
-    ix, name_serial_type = parse_varint(record[offset:])
-
-    offset+=ix
-    ix, tname_serial_type = parse_varint(record[offset:])
-    
-    offset+=ix
-    ix, rootpage_serial_type = parse_varint(record[offset:])
-   
-    type_size = (type_serial_type -13)/2
-    name_size = (name_serial_type -13)/2
-    tname_size = (tname_serial_type -13)/2
-    
-
-    tname_value_offset = int(num_bytes_header + type_size + name_size)
-
-    tname = record[tname_value_offset: tname_value_offset + int(tname_size)]
-    
-    rp_offset = tname_value_offset + int(tname_size)
-    rootpage = int.from_bytes(record[rp_offset: rp_offset + rootpage_serial_type], 'big')
-
-    return tname, rootpage
-
-
-if command == ".dbinfo":
-    with open(database_file_path, "rb") as database_file:
-        # You can use print statements as follows for debugging, they'll be visible when running tests.
-
-        # Uncomment this to pass the first stage
-        database_file.seek(16)  # Skip the first 16 bytes of the header
-        page_size = int.from_bytes(database_file.read(2), byteorder="big")
+        cell_size_bytes, cell_size = parse_varint(pbytes[cell_pointer: cell_pointer+9])
         
-        database_file.seek(103) # Skip database header
-        number_of_tables = int.from_bytes(database_file.read(2), byteorder="big")
+        offset = cell_pointer + cell_size_bytes
+        rowid_bytes, self.row_id = parse_varint(pbytes[offset:offset+9])
 
-        print(f"database page size: {page_size}")
-        print(f"number of tables: {number_of_tables}")
-         
-elif command == ".tables":
-    with open(database_file_path, "rb") as database_file:
-        database_file.seek(103) # Skip database header
-        ncells = int.from_bytes(database_file.read(2), byteorder="big")
+        offset+= rowid_bytes
+        payload = pbytes[offset:offset+cell_size]
+        self.payload = payload
+        self.payload_offset = offset 
+    
+"""
+CREATE TABLE sqlite_schema(
+  type text,
+  name text,
+  tbl_name text,
+  rootpage integer,
+  sql text
+);
+"""
+class SchemaCell(Cell):
+    def __init__(self, cell_pointer, pbytes):
+        super().__init__(cell_pointer, pbytes)
 
+        self.parse_schema_record(self.payload)
+    
+    def parse_schema_record(self, record):
 
-        # read cell pointers
-        database_file.seek(100 +8)
-        cell_pointers = [
-                int.from_bytes(database_file.read(2), "big") 
-                for _ in range(ncells)]
+        offset=0
+        ix, num_bytes_header = parse_varint(record)
+        offset+=ix
+        ix, type_serial_type = parse_varint(record[offset:])
 
+        offset+=ix
+        ix, name_serial_type = parse_varint(record[offset:])
 
-        # A varint which is the total number of bytes of payload, including any overflow
-        # A varint which is the integer key, a.k.a. "rowid"
-        # The initial portion of the payload that does not spill to overflow pages.
-        tables = []
-        for cell_pointer in cell_pointers:
-            database_file.seek(cell_pointer)
-            bsize, num_pl = parse_varint(database_file.read(9))
-           
-            database_file.seek(cell_pointer + bsize)
-            bsize2, row_id = parse_varint(database_file.read(9))
-
-            database_file.seek(cell_pointer + bsize + bsize2)
-            payload = database_file.read(num_pl)
-            tables.append(parse_record(payload)[0].decode())
+        offset+=ix
+        ix, tname_serial_type = parse_varint(record[offset:])
         
-        print(" ".join(tables))
-elif command.startswith("select"):
-     with open(database_file_path, "rb") as database_file:
-        database_file.seek(103) # Skip database header
-        ncells = int.from_bytes(database_file.read(2), byteorder="big")
+        offset+=ix
+        ix, rootpage_serial_type = parse_varint(record[offset:])
+    
+        type_size = (type_serial_type -13)/2
+        name_size = (name_serial_type -13)/2
+        tname_size = (tname_serial_type -13)/2
+        
+
+        tname_value_offset = int(num_bytes_header + type_size + name_size)
+
+        self.table_name = record[tname_value_offset: tname_value_offset + int(tname_size)]
+        
+        rp_offset = tname_value_offset + int(tname_size)
+        self.rootpage = int.from_bytes(record[rp_offset: rp_offset + rootpage_serial_type], 'big')
+
+class PageHeader:
+    def __init__(self, hbytes):
+        # hbytes ==8 for leaf, 12 for interior
+        self.page_type = int.from_bytes(hbytes[0:1], 'big')
+        if self.page_type in (2, 5):
+            self.is_interior = True
+        else: 
+            self.is_interior = False
+        if self.page_type in (2, 10):
+            self.is_index = True
+        else:
+            self.is_index = False
+    
+        self.num_cells = int.from_bytes(hbytes[3:5], "big")
+
+class DBHeader:
+    def __init__(self, hbytes):
+        self.page_size = int.from_bytes(hbytes[16:18], 'big')
+        self.sheader = PageHeader(hbytes[100:108])
 
 
-        # read cell pointers
-        database_file.seek(100 +8)
-        cell_pointers = [
-                int.from_bytes(database_file.read(2), "big") 
-                for _ in range(ncells)]
+class Page:
+    def __init__(self, pbytes, cell_class, offset=0):
+        self.page_header = PageHeader(pbytes[offset:offset + 12])
+        if self.page_header.is_interior:
+            self.header_size = 12 
+        else:
+            self.header_size = 8
+    
+        self.cell_ptrs =[] 
+        self.cells = [] 
+
+        offset = offset + self.header_size
+        cell_ptr_end = offset + 2 * self.page_header.num_cells
+        for i in range(offset, cell_ptr_end, 2):
+            self.cell_ptrs.append(
+                int.from_bytes(pbytes[i:i+2], "big")
+            )
+
+        if self.page_header.page_type != 13:
+            print("Page Not supported !")
+        
+        for cell_pointer in self.cell_ptrs:
+            self.cells.append(
+                cell_class(cell_pointer, pbytes)
+            )
 
 
-        # A varint which is the total number of bytes of payload, including any overflow
-        # A varint which is the integer key, a.k.a. "rowid"
-        # The initial portion of the payload that does not spill to overflow pages.
-        tables = []
-        for cell_pointer in cell_pointers:
-            database_file.seek(cell_pointer)
-            bsize, num_pl = parse_varint(database_file.read(9))
-           
-            database_file.seek(cell_pointer + bsize)
-            bsize2, row_id = parse_varint(database_file.read(9))
+def main(command, database_file_path):
+    with open(database_file_path, "rb") as database_file:
+        db = DBHeader(database_file.read(108))
 
-            database_file.seek(cell_pointer + bsize + bsize2)
-            payload = database_file.read(num_pl)
+    if command == ".dbinfo":
+        print(f"database page size: {db.page_size}")
+        print(f"number of tables: {db.sheader.num_cells}")
             
-            table, rootpage = parse_record(payload)
-            if table.decode() == command.split(" ")[-1]:
-                database_file.seek((rootpage-1) * 4096 + 3)
-                ncells = database_file.read(2)
-                print(int.from_bytes(ncells, 'big'))
+    elif command == ".tables":
+        with open(database_file_path, "rb") as database_file:
 
+            schema_page = Page(database_file.read(4096), SchemaCell, offset=100)
+            tables = [cell.table_name  
+                      for cell in schema_page.cells 
+                      if cell.table_name != b'sqlite_schema']
+            
+            print(b" ".join(tables).decode())
+    
+    elif command.startswith("select"):
+        with open(database_file_path, "rb") as database_file:
+            schema_page = Page(database_file.read(4096), SchemaCell, offset=100)
 
-else:
-    print(f"Invalid command: {command}")
+            for cell in schema_page.cells:
+                if cell.table_name == command.split(" ")[-1].encode():
+                    database_file.seek((cell.rootpage-1) * 4096)
+                    data_page = Page(database_file.read(4096), Cell)
+                    print(data_page.page_header.num_cells)
+    else:
+        print(f"Invalid command: {command}")
+
+if __name__ == "__main__":
+    database_file_path = sys.argv[1]
+    command = sys.argv[2].lower().strip()
+    main(command, database_file_path)
