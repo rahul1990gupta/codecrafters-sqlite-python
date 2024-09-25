@@ -1,7 +1,7 @@
 import sys
 import re
 from dataclasses import dataclass
-
+from enum import Enum
 # import sqlparse - available if you need it!
 
 
@@ -9,16 +9,17 @@ from dataclasses import dataclass
 - first 100 bytes contains the database header
 
 """
-    
+class PageType(Enum):
+    TableLeaf = 13 
+    TableInterior = 5
+    IndexLeaf = 10
+    IndexInterior = 2
 
 def parse_sql(sql):
     sql = sql.lower().replace("\n", "").replace("\t", "")
-    match = re.match(r"create table [a-z\_]*[\s]*\((.*)\)", sql)
-    try:
-        cols_string = match.group(1)
-    except Exception as e:
-        print(sql)
-        print(e)
+    match = re.match(r"[a-z\_\s\"\']*\((.*)\)", sql)
+
+    cols_string = match.group(1)
     columns = [col_string.strip() for col_string in cols_string.split(",")]
     return columns
 
@@ -31,20 +32,16 @@ def parse_varint(byte_stream):
     :return: The parsed 64-bit two's complement integer.
     """
     result = 0
-    shift = 0
     
     for i in range(9):  # Varint can be up to 9 bytes long
         byte = byte_stream[i]
-        
-        # Add the lower 7 bits of the current byte to the result
-        result |= (byte & 0x7F) << shift
-        shift += 7
-        
-        # If high-order bit is clear, we've reached the last byte
-        if byte & 0x80 == 0:
-            return i+1, result
+        result = result << 7
+        result |= byte & 0x7F
 
-    return 9, result  # If all 9 bytes are processed, this is the final result
+        if byte & 0x80 == 0:
+            break
+    
+    return i+1, result  # If all 9 bytes are processed, this is the final result
 
 """
 CREATE TABLE sqlite_schema(
@@ -60,7 +57,6 @@ CREATE TABLE sqlite_schema(
 
 class Cell:
     def __init__(self, cell_pointer, pbytes, dtypes, cnames):
-
         cell_size_bytes, cell_size = parse_varint(pbytes[cell_pointer: cell_pointer+9])
         
         offset = cell_pointer + cell_size_bytes
@@ -83,17 +79,19 @@ class Cell:
             self.process_sql(self.get("sql"))
     
     def parse_schema_record(self, record, dtypes):
+
         self.dvalues = []
         header_offset, num_bytes_header = parse_varint(record)
         value_offset = num_bytes_header
         for dtype in dtypes:
+            
             if dtype == "text":
                 ix, dtype_serial_type = parse_varint(record[header_offset:])
                 dtype_size = (dtype_serial_type -13)/2
             elif dtype == "integer":
                 ix, dtype_serial_type = parse_varint(record[header_offset:])
                 dtype_size = dtype_serial_type
-            
+
             start = int(value_offset)
             end = start + int(dtype_size)
             dvalue = record[start:end]
@@ -103,9 +101,12 @@ class Cell:
             header_offset+=ix 
             value_offset+=dtype_size
 
+
     def get(self, col):
         for index, name in enumerate(self.cnames):
-            if col == name:
+            if col =="id":
+                return self.row_id
+            elif col == name:
                 value = self.dvalues[index]
                 if self.dtypes[index] == "integer":
                     value = int.from_bytes(value, "big")
@@ -123,11 +124,11 @@ class PageHeader:
     def __init__(self, hbytes):
         # hbytes ==8 for leaf, 12 for interior
         self.page_type = int.from_bytes(hbytes[0:1], 'big')
-        if self.page_type in (2, 5):
+        if self.page_type in (PageType.IndexInterior.value, PageType.TableInterior.value):
             self.is_interior = True
         else: 
             self.is_interior = False
-        if self.page_type in (2, 10):
+        if self.page_type in (PageType.IndexLeaf.value, PageType.IndexInterior.value):
             self.is_index = True
         else:
             self.is_index = False
@@ -137,14 +138,18 @@ class PageHeader:
 
 class Page:
     def __init__(self, pbytes, offset, dtypes, cnames):
+
         self.page_header = PageHeader(pbytes[offset:offset + 12])
         if self.page_header.is_interior:
             self.header_size = 12 
         else:
             self.header_size = 8
+        self.dtypes = dtypes
+        self.cnames = cnames
     
         self.cell_ptrs =[] 
         self.cells = []
+        self.children = []
 
         offset = offset + self.header_size
         cell_ptr_end = offset + 2 * self.page_header.num_cells
@@ -152,14 +157,31 @@ class Page:
             self.cell_ptrs.append(
                 int.from_bytes(pbytes[i:i+2], "big")
             )
-
-        if self.page_header.page_type != 13:
-            print("Page Not supported !")
-        
-
         for cell_pointer in self.cell_ptrs:
-            cell = Cell(cell_pointer, pbytes, dtypes, cnames)
-            self.cells.append(cell)
+            if self.page_header.page_type == 13:
+                cell = Cell(cell_pointer, pbytes, dtypes, cnames)
+                self.cells.append(cell)
+            elif self.page_header.page_type == 5:
+                child_page = int.from_bytes(pbytes[cell_pointer: cell_pointer+4], "big")
+                ix, rowid = parse_varint(pbytes[cell_pointer + 4: cell_pointer + 13])
+                
+                self.children.append((child_page, rowid))
+            else:
+                print("Not supported")
+
+    def get_cells(self, database_file_path):
+        if self.page_header.page_type == PageType.TableLeaf.value:
+            return self.cells
+        elif self.page_header.page_type == PageType.TableInterior.value:
+            cells = []
+            with open(database_file_path, "rb") as f:
+                for child_page, _ in self.children:
+                    f.seek((child_page-1) * 4096)
+                    child_page = Page(f.read(4096), 0, self.dtypes, self.cnames)
+                    cells += child_page.get_cells(database_file_path)
+
+            return cells
+
 
 class SchemaPage(Page):
     def __init__(self, pbytes, offset):
@@ -231,21 +253,22 @@ def main(command, database_file_path):
         sql = SQLParser(command)
         table_name = sql.table_name
         cols = sql.columns
+
         
     if command == ".tables":
         tables = [tname  
                     for tname in schema_page.tables.keys() 
-                    if tname != b'sqlite_sequence']
+                    if tname != 'sqlite_sequence']
         print(" ".join(tables))
     
-    elif command.startswith("select") and "count" in command:
+    elif command.lower().startswith("select") and "count" in command:
         with open(database_file_path, "rb") as database_file:
             cell = schema_page.tables[table_name]
             database_file.seek((cell.get("rootpage")-1) * 4096)
 
             data_page = Page(database_file.read(4096), 0,  cell.tdtypes, cell.tcnames)
             print(data_page.page_header.num_cells)
-    elif command.startswith("select"):
+    elif command.lower().startswith("select"):
         # find rootpage for the table and build data page 
         with open(database_file_path, "rb") as database_file:
             cell = schema_page.tables[table_name]
@@ -253,12 +276,13 @@ def main(command, database_file_path):
 
             data_page = Page(database_file.read(4096), 0, cell.tdtypes, cell.tcnames)
 
-            for cell in data_page.cells:
+            for cell in data_page.get_cells(database_file_path):
                 if sql.qualify(cell):
                     vals = [cell.get(col) for col in cols]
-                    print("|".join(vals))
+                    print("|".join(map(str, vals)))
     else:
         print(f"Invalid command: {command}")
+
 
 if __name__ == "__main__":
     database_file_path = sys.argv[1]

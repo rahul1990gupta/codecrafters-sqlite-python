@@ -21,9 +21,9 @@ class TestMain(unittest.TestCase):
     def test_parse_varint(self):
         self.assertEqual(parse_varint(b'\x00'), (1, 0))
         self.assertEqual(parse_varint(b'\x7f'), (1, 127))
-        self.assertEqual(parse_varint(b'\x80\x01'), (2, 128))
-        self.assertEqual(parse_varint(b'\xff\x01'), (2, 255))
-        self.assertEqual(parse_varint(b'\x80\x80\x01'), (3, 16384))
+        self.assertEqual(parse_varint(b'\x80\x01'), (2, 0b_000_0000_000_0001))
+        self.assertEqual(parse_varint(b'\xff\x01'), (2, 0b_111_1111_000_0001))
+        self.assertEqual(parse_varint(b'\x83\x13'), (2, 0b_000_0011_001_0011))
 
     def test_page_header(self):
         with open("sample.db", "rb") as database_file:
