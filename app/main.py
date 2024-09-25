@@ -14,8 +14,11 @@ from dataclasses import dataclass
 def parse_sql(sql):
     sql = sql.lower().replace("\n", "").replace("\t", "")
     match = re.match(r"create table [a-z\_]*[\s]*\((.*)\)", sql)
-    cols_string = match.group(1)
-
+    try:
+        cols_string = match.group(1)
+    except Exception as e:
+        print(sql)
+        print(e)
     columns = [col_string.strip() for col_string in cols_string.split(",")]
     return columns
 
@@ -177,6 +180,40 @@ class DBHeader:
         self.page_size = int.from_bytes(hbytes[16:18], 'big')
         self.sheader = PageHeader(hbytes[100:108])
 
+class SQLParser:
+    def __init__(self, sql):
+        si = sql.lower().find("select")
+        fi = sql.lower().find("from")
+        wi = sql.lower().find("where")
+        if wi ==-1:
+            wi = len(sql)
+
+        select_clause = sql[si:fi]
+        from_clause = sql[fi:wi]
+        where_clause = sql[wi:]
+
+        self.columns = [col.strip() for col in select_clause[7:].split(",")]
+        self.table_name = from_clause[5:].strip()
+
+        self.has_where = False
+        if len(where_clause)> 6:
+            self.has_where = True
+            condition = where_clause[6:].strip()
+            match = re.search(r"(=|<|>)", condition)
+            self.condition = (
+                condition[:match.start()].strip(),
+                condition[match.start(): match.end()],
+                condition[match.end():].strip() 
+            )
+
+    def qualify(self, cell):
+        if self.has_where:
+            value = cell.get(self.condition[0])
+            op = self.condition[1]
+            op = "==" if op == "=" else op 
+            expression = f"\'{value}\'{op}{self.condition[2]}"
+            return eval(expression)
+        return True
 
 def main(command, database_file_path):
     with open(database_file_path, "rb") as database_file:
@@ -191,9 +228,9 @@ def main(command, database_file_path):
         schema_page = SchemaPage(database_file.read(4096), offset=100)
 
     if not command.startswith("."):
-        table_name = command.split(" ")[-1] 
-        before_from = command.split("from")[0]
-        col_str = before_from.split("select")[1].strip()
+        sql = SQLParser(command)
+        table_name = sql.table_name
+        cols = sql.columns
         
     if command == ".tables":
         tables = [tname  
@@ -201,7 +238,7 @@ def main(command, database_file_path):
                     if tname != b'sqlite_sequence']
         print(" ".join(tables))
     
-    elif command.startswith("select") and col_str.startswith("count"):
+    elif command.startswith("select") and "count" in command:
         with open(database_file_path, "rb") as database_file:
             cell = schema_page.tables[table_name]
             database_file.seek((cell.get("rootpage")-1) * 4096)
@@ -209,9 +246,6 @@ def main(command, database_file_path):
             data_page = Page(database_file.read(4096), 0,  cell.tdtypes, cell.tcnames)
             print(data_page.page_header.num_cells)
     elif command.startswith("select"):
-        # column and table are available 
-        cols = col_str.split(",")
-        cols = [col.strip() for col in cols]
         # find rootpage for the table and build data page 
         with open(database_file_path, "rb") as database_file:
             cell = schema_page.tables[table_name]
@@ -220,12 +254,13 @@ def main(command, database_file_path):
             data_page = Page(database_file.read(4096), 0, cell.tdtypes, cell.tcnames)
 
             for cell in data_page.cells:
-                vals = [cell.get(col) for col in cols]
-                print("|".join(vals))
+                if sql.qualify(cell):
+                    vals = [cell.get(col) for col in cols]
+                    print("|".join(vals))
     else:
         print(f"Invalid command: {command}")
 
 if __name__ == "__main__":
     database_file_path = sys.argv[1]
-    command = sys.argv[2].lower().strip()
+    command = sys.argv[2].strip()
     main(command, database_file_path)
