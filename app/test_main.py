@@ -1,16 +1,22 @@
 import unittest 
+import sqlparse
 from app.main import (
     parse_varint,
     PageHeader,
     DBHeader,
     Page,
-    SchemaCell,
-    Cell
+    Cell,
+    SchemaPage
 )
 class TestMain(unittest.TestCase):
     def setUp(self):
         with open("sample.db", "rb") as database_file:
             self.first_page = database_file.read(4096)
+        
+        self.schema_dtypes = ["text", "text", "text", "integer", "text"]
+        self.schema_cnames = ["type", "name", "tbl_name", "rootpage", "sql"]
+
+        self.schema_page = SchemaPage(self.first_page, offset=100)
 
     def test_parse_varint(self):
         self.assertEqual(parse_varint(b'\x00'), (1, 0))
@@ -39,22 +45,24 @@ class TestMain(unittest.TestCase):
 
     def test_cell(self):
         # [3983, 3901, 3779]
-        cell = Cell(3983, self.first_page)
+        cell = Cell(3983, self.first_page, 
+                    self.schema_dtypes, self.schema_cnames)
 
         self.assertEqual(cell.row_id, 1)
         self.assertEqual(len(cell.payload), 111)
         self.assertEqual(cell.payload_offset, 3985)
 
-                
-    def test_schema_cell(self):
-        cell = SchemaCell(3983, self.first_page)
-        self.assertEqual(cell.table_name, b'apples')
-        self.assertEqual(cell.rootpage, 1)
-        self.assertEqual(cell.sql, None)
+        self.assertEqual(cell.get("tbl_name"), 'apples')
+        self.assertEqual(cell.get("rootpage"), 2)
+
+        self.assertListEqual(cell.tcnames, ["id", "name", "color"])
+        self.assertListEqual(cell.tdtypes, ["integer", "text", "text"]) 
+
 
     def test_page(self):
-        schema_page = Page(self.first_page, SchemaCell, offset=100)
-        self.assertEqual(len(schema_page.cells), 3)
-        self.assertEqual(len(schema_page.cell_ptrs), 3)
-
-
+        self.assertEqual(len(self.schema_page.cells), 3)
+        self.assertEqual(len(self.schema_page.cell_ptrs), 3)
+        self.assertListEqual(
+            list(self.schema_page.tables.keys()), 
+            ['apples', 'sqlite_sequence', 'oranges']
+        )
