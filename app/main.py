@@ -210,7 +210,8 @@ def main(command, database_file_path):
             print(data_page.page_header.num_cells)
     elif command.startswith("select"):
         # column and table are available 
-        col = col_str
+        cols = col_str.split(",")
+        cols = [col.strip() for col in cols]
         # find rootpage for the table and build data page 
         with open(database_file_path, "rb") as database_file:
             cell = schema_page.tables[table_name]
@@ -219,7 +220,8 @@ def main(command, database_file_path):
             data_page = Page(database_file.read(4096), 0, cell.tdtypes, cell.tcnames)
 
             for cell in data_page.cells:
-                print(cell.get(col))
+                vals = [cell.get(col) for col in cols]
+                print("|".join(vals))
     else:
         print(f"Invalid command: {command}")
 
