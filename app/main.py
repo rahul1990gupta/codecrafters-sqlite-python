@@ -13,8 +13,7 @@ from dataclasses import dataclass
 
 def parse_sql(sql):
     sql = sql.lower().replace("\n", "").replace("\t", "")
-    match = re.match(r"create table [a-z\_]*\((.*)\)", sql)
-
+    match = re.match(r"create table [a-z\_]*[\s]*\((.*)\)", sql)
     cols_string = match.group(1)
 
     columns = [col_string.strip() for col_string in cols_string.split(",")]
@@ -182,30 +181,32 @@ class DBHeader:
 def main(command, database_file_path):
     with open(database_file_path, "rb") as database_file:
         db = DBHeader(database_file.read(108))
-        database_file.seek(0)
+
+    if command == ".dbinfo":
+        print(f"database page size: {db.page_size}")
+        print(f"number of tables: {db.sheader.num_cells}")
+        return 
+
+    with open(database_file_path, "rb") as database_file:
         schema_page = SchemaPage(database_file.read(4096), offset=100)
 
     if not command.startswith("."):
         table_name = command.split(" ")[-1] 
         before_from = command.split("from")[0]
         col_str = before_from.split("select")[1].strip()
-    
-    if command == ".dbinfo":
-        print(f"database page size: {db.page_size}")
-        print(f"number of tables: {db.sheader.num_cells}")
-            
-    elif command == ".tables":
+        
+    if command == ".tables":
         tables = [tname  
                     for tname in schema_page.tables.keys() 
                     if tname != b'sqlite_sequence']
-        print(b" ".join(tables))
+        print(" ".join(tables))
     
     elif command.startswith("select") and col_str.startswith("count"):
         with open(database_file_path, "rb") as database_file:
             cell = schema_page.tables[table_name]
             database_file.seek((cell.get("rootpage")-1) * 4096)
 
-            data_page = Page(database_file.read(4096), 0, None, None)
+            data_page = Page(database_file.read(4096), 0,  cell.tdtypes, cell.tcnames)
             print(data_page.page_header.num_cells)
     elif command.startswith("select"):
         # column and table are available 
