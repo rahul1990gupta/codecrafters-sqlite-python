@@ -37,9 +37,9 @@ class SQLParser:
                 condition[match.end():].strip() 
             )
 
-    def qualify(self, cell):
+    def qualify(self, record):
         if self.has_where:
-            value = cell.get(self.condition[0])
+            value = record.get(self.condition[0])
             op = self.condition[1]
             op = "==" if op == "=" else op 
             expression = f"\'{value}\'{op}{self.condition[2]}"
@@ -73,22 +73,24 @@ def main(command, database_file_path):
     elif command.lower().startswith("select") and "count" in command:
         with open(database_file_path, "rb") as database_file:
             cell = schema_page.tables[table_name]
-            database_file.seek((cell.get("rootpage")-1) * 4096)
+            database_file.seek((cell.get_value("rootpage")-1) * 4096)
 
             data_page = Page(database_file.read(4096), 0,  cell.tdtypes, cell.tcnames)
             print(data_page.page_header.num_cells)
     elif command.lower().startswith("select"):
         # find rootpage for the table and build data page 
         with open(database_file_path, "rb") as database_file:
-            cell = schema_page.tables[table_name]
-            database_file.seek((cell.get("rootpage")-1) * 4096)
+            schema_cell = schema_page.tables[table_name]
+            database_file.seek((schema_cell.get_value("rootpage")-1) * 4096)
 
-            data_page = Page(database_file.read(4096), 0, cell.tdtypes, cell.tcnames)
+            data_page = Page(database_file.read(4096), 0, schema_cell.tdtypes, schema_cell.tcnames)
 
-            for cell in data_page.get_cells(database_file_path):
-                if sql.qualify(cell):
-                    vals = [cell.get(col) for col in cols]
-                    print("|".join(map(str, vals)))
+        data = data_page.get_data(database_file_path)
+
+        for record in data:
+            if sql.qualify(record):
+                vals = [record.get(col) for col in cols]
+                print("|".join(map(str, vals)))
     else:
         print(f"Invalid command: {command}")
 

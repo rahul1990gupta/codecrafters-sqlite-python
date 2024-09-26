@@ -1,8 +1,8 @@
 from enum import Enum 
-from cell import (
-    Cell 
+from util import (
+    parse_varint,
+    parse_sql
 )
-from util import parse_varint 
 
 class PageType(Enum):
     TableLeaf = 13 
@@ -50,30 +50,22 @@ class Page:
                 int.from_bytes(pbytes[i:i+2], "big")
             )
         for cell_pointer in self.cell_ptrs:
-            if self.page_header.page_type == 13:
-                cell = Cell(cell_pointer, pbytes, dtypes, cnames)
-                self.cells.append(cell)
-            elif self.page_header.page_type == 5:
-                child_page = int.from_bytes(pbytes[cell_pointer: cell_pointer+4], "big")
-                ix, rowid = parse_varint(pbytes[cell_pointer + 4: cell_pointer + 13])
-                
-                self.children.append((child_page, rowid))
+            if self.page_header.page_type == PageType.TableLeaf.value:
+                cell = TableLeafCell(cell_pointer, pbytes, dtypes, cnames)
+            elif self.page_header.page_type == PageType.TableInterior.value:
+                cell = TableInteriorCell(cell_pointer, pbytes, dtypes, cnames)
             else:
                 print("Not supported")
+            
+            self.cells.append(cell)
+    
+    def get_data(self, database_file_path):
+        data = []
+        for cell in self.cells:
+            cell_data = cell.get_data(database_file_path)
+            data += cell_data
 
-    def get_cells(self, database_file_path):
-        if self.page_header.page_type == PageType.TableLeaf.value:
-            return self.cells
-        elif self.page_header.page_type == PageType.TableInterior.value:
-            cells = []
-            with open(database_file_path, "rb") as f:
-                for child_page, _ in self.children:
-                    f.seek((child_page-1) * 4096)
-                    child_page = Page(f.read(4096), 0, self.dtypes, self.cnames)
-                    cells += child_page.get_cells(database_file_path)
-
-            return cells
-
+        return data
 
 class SchemaPage(Page):
     def __init__(self, pbytes, offset):
@@ -85,6 +77,106 @@ class SchemaPage(Page):
         self.tables = {}
         for cell in self.cells:
             self.tables.update({
-                cell.get("tbl_name"): cell
+                cell.get_value("tbl_name"): cell
             })
         
+###################################################################################################
+
+def parse_payload(record, dtypes):
+    dvalues = []
+    header_offset, num_bytes_header = parse_varint(record)
+    value_offset = num_bytes_header
+    for dtype in dtypes:
+        
+        if dtype == "text":
+            ix, dtype_serial_type = parse_varint(record[header_offset:])
+            dtype_size = (dtype_serial_type -13)/2
+        elif dtype == "integer":
+            ix, dtype_serial_type = parse_varint(record[header_offset:])
+            dtype_size = dtype_serial_type
+
+        start = int(value_offset)
+        end = start + int(dtype_size)
+        dvalue = record[start:end]
+        dvalues.append(dvalue)
+
+        # update offsets 
+        header_offset+=ix 
+        value_offset+=dtype_size
+
+    return dvalues 
+
+class TableLeafCell:
+    def __init__(self, cell_pointer, pbytes, dtypes, cnames):
+        cell_size_bytes, cell_size = parse_varint(pbytes[cell_pointer: cell_pointer+9])
+        
+        offset = cell_pointer + cell_size_bytes
+        rowid_bytes, self.row_id = parse_varint(pbytes[offset:offset+9])
+
+        offset+= rowid_bytes
+        payload = pbytes[offset:offset+cell_size]
+        self.payload = payload
+        self.payload_offset = offset 
+    
+        if dtypes:
+            self.dvalues = parse_payload(
+                self.payload,
+                dtypes
+            )
+        self.cnames = cnames
+        self.dtypes = dtypes
+        
+        if self.cnames[-1] == "sql" and self.get_value("tbl_name") != "sqlite_sequence":
+            self.process_sql(self.get_value("sql"))
+
+
+    def get_value(self, col):
+
+        for index, name in enumerate(self.cnames):
+            if col =="id":
+                return self.row_id
+            elif col == name:
+                value = self.dvalues[index]
+                if self.dtypes[index] == "integer":
+                    value = int.from_bytes(value, "big")
+                else: 
+                    value = value.decode()
+                return value
+        
+    
+    def process_sql(self, sql):
+        columns = parse_sql(sql)
+        self.tcnames = [col.split(" ")[0] for col in columns]
+        self.tdtypes = [col.split(" ")[1] for col in columns]
+    
+    def get_data(self, database_file_path):
+        data_dict = {
+            col: self.dvalues[i].decode()
+            for i, col in enumerate(self.cnames)
+        }
+        data_dict.update({"id": self.row_id})
+        return [data_dict]
+
+class TableInteriorCell:
+    def __init__(self, cell_pointer, pbytes, dtypes, cnames):
+        self.child_page_no = int.from_bytes(pbytes[cell_pointer: cell_pointer+4], "big")
+        ix, rowid = parse_varint(pbytes[cell_pointer + 4: cell_pointer + 13])
+        self.dtypes = dtypes 
+        self.cnames = self.cnames 
+
+    def get_data(self, database_file_path):
+        with open(database_file_path, "rb") as f:
+            f.seek((self.child_page_no - 1) * 4096)
+            self.child_page = Page(f.read(4096), 0, self.dtypes, self.cnames)
+        
+        return self.child_page.get_data(database_file_path)
+
+class IndexLeafCell:
+    def __init__(self):
+        pass 
+
+class IndexInteriorCell:
+    def __init__(self):
+        pass 
+
+
