@@ -64,7 +64,7 @@ def get_row_ids(schema_page, table_name, database_file_path, cond_value):
                               ["country", "rowid"])
         
     index_data = index_rootpage.get_data(database_file_path, cond_value)
-    print("cells scanned", len(index_data))
+    # print("cells scanned", len(index_data))
     filtered_data = [
         d for d in index_data if d.get("country") == cond_value
     ]
@@ -111,8 +111,6 @@ def main(command, database_file_path):
             print(data_page.page_header.num_cells)
     elif command.lower().startswith("select"):
         # find rootpage for the table and build data page 
-
-        
         # assert row_ids == [121311, 2102438, 5729848, 6634629]
         
         # {6634629, 2102438, 121311}
@@ -125,14 +123,18 @@ def main(command, database_file_path):
 
             data_page = Page(page_no, database_file.read(4096), 0, schema_cell.tdtypes, schema_cell.tcnames)
 
+        # #######
+        # data = data_page.get_data(database_file_path, 6634629)
+        # print(data)
+        # sys.exit(0)
+        # #############
+
         if index_exists(schema_page, table_name):
             cond_value = sql.get_condition_value().replace("'", "")
             records = get_row_ids(schema_page, table_name, database_file_path, cond_value)
 
             for record in records:
-                print(record, record.get("rowid"))
                 data+=data_page.get_data(database_file_path, record.get("rowid"))
-            print("data fetched", len(data))
         else:
             data = data_page.get_data(database_file_path, None)
 

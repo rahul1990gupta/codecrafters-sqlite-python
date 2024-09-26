@@ -74,16 +74,19 @@ class Page:
                 break 
             if cond_value <= val:
                 data += self.cells[i].get_data(database_file_path, cond_value)
-        # if self.page_header.is_interior:
-        #     with open(database_file_path, "rb") as db:
-        #         db.seek((self.right_most_page_no - 1) * 4096)
-        #         self.right_most_page = Page(
-        #             self.right_most_page_no, db.read(4096), 0, self.dtypes, self.cnames
-        #         )
-        #     data.extend(self.right_most_page._bsearch(database_file_path, cond_value))
+        
+        if self.page_header.is_interior and cond_value > values[-1]:
+            with open(database_file_path, "rb") as db:
+                db.seek((self.right_most_page_no - 1) * 4096)
+                self.right_most_page = Page(
+                    self.right_most_page_no, db.read(4096), 0, self.dtypes, self.cnames
+                )
+            data.extend(self.right_most_page._bsearch(database_file_path, cond_value))
+        
         return data
     
     def get_data(self, database_file_path, cond_value):
+
         # print("getting data..", self.page_header.page_type)
         if cond_value:
             return self._bsearch(database_file_path, cond_value)
@@ -192,7 +195,7 @@ class TableLeafCell:
             self.tdtypes.append(dtype)
     
     def get_data(self, database_file_path, cond_value):
-        # print("getting data...", TableLeafCell)
+        # print("getting data...", TableLeafCell, self.row_id)
         data_dict = {
             col: self.dvalues[i]
             for i, col in enumerate(self.cnames)
@@ -212,7 +215,7 @@ class TableInteriorCell:
         self.cnames = cnames 
 
     def get_data(self, database_file_path, cond_value):
-        # print("getting data...", TableInteriorCell)
+        # print("getting data...", TableInteriorCell, self.rowid)
         with open(database_file_path, "rb") as f:
             f.seek((self.child_page_no - 1) * 4096)
             self.child_page = Page(self.child_page_no, f.read(4096), 0, self.dtypes, self.cnames)
@@ -293,7 +296,13 @@ class IndexInteriorCell:
             self.child_page = Page(self.child_page_no,
                 f.read(4096), 0, self.dtypes, self.cnames)
         
-        return self.child_page.get_data(database_file_path, cond_value)
+        data = []
+        if self.dvalues[0] == cond_value:
+            data = [{
+                col: self.dvalues[i]
+                for i, col in enumerate(self.cnames)
+            }]
+        return data + self.child_page.get_data(database_file_path, cond_value)
 
     def get_index(self):
         return self.dvalues[0]
