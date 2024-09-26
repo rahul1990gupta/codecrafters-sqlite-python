@@ -1,4 +1,4 @@
-from app.util import (
+from util import (
     parse_varint,
     parse_sql
 )

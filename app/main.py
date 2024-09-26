@@ -1,8 +1,9 @@
 import sys
 import re
-from app.page import (
+from page import (
     PageHeader,
-    SchemaPage
+    SchemaPage,
+    Page
 )
 
 class DBHeader:
